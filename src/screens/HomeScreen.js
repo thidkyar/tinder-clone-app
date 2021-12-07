@@ -6,8 +6,21 @@ import tw from "tailwind-rn";
 import useAuth from "../hooks/useAuth";
 import { Ionicons, Entypo } from "@expo/vector-icons";
 import Swiper from "react-native-deck-swiper";
-import { collection, doc, onSnapshot } from "@firebase/firestore";
+import {
+    collection,
+    doc,
+    getDoc,
+    getDocs,
+    onSnapshot,
+    query,
+    serverTimestamp,
+    setDoc,
+    where,
+    connectFirestoreEmulator,
+
+} from "@firebase/firestore";
 import { db } from "../utils/firebase";
+import generateId from "../utils/generateIds";
 
 const HomeScreen = () => {
     const navigation = useNavigation();
@@ -28,41 +41,115 @@ const HomeScreen = () => {
     useEffect(() => {
         let unsub;
         const fetchCards = async () => {
-            unsub = onSnapshot(collection(db, "users"), (snapshot) => {
-                setProfiles(
-                    snapshot.docs
-                        .filter((doc) => doc.id !== user.uid)
-                        .map((doc) => ({
-                            id: doc.id,
-                            ...doc.data(),
-                        }))
-                );
-            });
+            const dislikedSwipes = await getDocs(
+                collection(db, "users", user.uid, "dislikedSwipes")
+            ).then((snapshot) => snapshot.docs.map((doc) => doc.id));
+
+            const likedSwipes = await getDocs(
+                collection(db, "users", user.uid, "likedSwipes")
+            ).then((snapshot) => snapshot.docs.map((doc) => doc.id));
+
+            const dislikedSwipesUserIds =
+                dislikedSwipes.length > 0 ? dislikedSwipes : ["test"];
+            const likedSwipesUserIds =
+                likedSwipes.length > 0 ? likedSwipes : ["test"];
+
+            unsub = onSnapshot(
+                query(
+                    collection(db, "users"),
+                    where("id", "not-in", [
+                        ...dislikedSwipesUserIds,
+                        ...likedSwipesUserIds,
+                    ])
+                ),
+                (snapshot) => {
+                    setProfiles(
+                        snapshot.docs
+                            .filter((doc) => doc.id !== user.uid)
+                            .map((doc) => ({
+                                id: doc.id,
+                                ...doc.data(),
+                            }))
+                    );
+                }
+            );
         };
 
         fetchCards();
         return unsub;
     }, []);
-    const DUMMY_DATA = [
-        {
-            firstName: "Vanessa",
-            lastName: "Hudgens",
-            occupation: ["Actor", "Singer"],
-            photoURL:
-                "https://upload.wikimedia.org/wikipedia/commons/f/f5/Vanessa_Hudgens_-_2019_by_Glenn_Francis.jpg",
-            age: 27,
-            id: 123,
-        },
-        {
-            firstName: "Taylor",
-            lastName: "Swift",
-            occupation: ["Singer", "Dancer", "Musician"],
-            photoURL:
-                "https://upload.wikimedia.org/wikipedia/commons/b/b5/191125_Taylor_Swift_at_the_2019_American_Music_Awards_%28cropped%29.png",
-            age: 29,
-            id: 123,
-        },
-    ];
+
+    const swipeLeft = (cardIndex) => {
+        if (!profiles[cardIndex]) return;
+        const userSwiped = profiles[cardIndex];
+        console.log(`you swiped fail on`, userSwiped.displayName);
+
+        setDoc(
+            doc(db, "users", user.uid, "dislikedSwipes", userSwiped.id),
+            userSwiped
+        );
+    };
+
+    const swipeRight = async (cardIndex) => {
+        if (!profiles[cardIndex]) return;
+
+        const userSwiped = profiles[cardIndex];
+        console.log(`you swiped pass on`, userSwiped.displayName);
+
+        const loggedInProfile = await(await getDoc(doc(db, "users", user.uid))).data()
+        console.log(loggedInProfile)
+        //check if user swiped on you...
+        getDoc(doc(db, "users", userSwiped.id, "likedSwipes", user.uid)).then(
+            (documentSnapshot) => {
+                if (documentSnapshot.exists()) {
+                    //user has matched with you before you matched with them..
+                    console.log(`You matched with`, userSwiped.displayName);
+
+                    setDoc(
+                        doc(
+                            db,
+                            "users",
+                            user.uid,
+                            "likedSwipes",
+                            userSwiped.id
+                        ),
+                        userSwiped
+                    );
+
+                    //create a MATCH
+                    setDoc(
+                        doc(db, "matches", generateId(user.uid, userSwiped.id)),
+                        {
+                            users: {
+                                [user.uid]: loggedInProfile,
+                                [userSwiped.id]: userSwiped,
+                            },
+                            usersMatched: [user.uid, userSwiped.id],
+                            timestamp: serverTimestamp(),
+                        }
+                    );
+
+                    navigation.navigate("Match", {
+                        loggedInProfile,
+                        userSwiped,
+                    });
+                } else {
+                    //user has swiped as first interaction between the two and didn't get swiped on...
+                    console.log(`You swiped on`, userSwiped.displayName);
+                    setDoc(
+                        doc(
+                            db,
+                            "users",
+                            user.uid,
+                            "likedSwipes",
+                            userSwiped.id
+                        ),
+                        userSwiped
+                    );
+                }
+            }
+        );
+    };
     return (
         <SafeAreaView style={tw("flex-1")}>
             <View style={tw("flex-row justify-between items-center px-5")}>
@@ -97,8 +184,14 @@ const HomeScreen = () => {
                     cardIndex={0}
                     verticalSwipe={false}
                     animateCardOpacity
-                    onSwipedLeft={() => console.log("FAIL")}
-                    onSwipedRight={() => console.log("PASS")}
+                    onSwipedLeft={(cardIndex) => {
+                        console.log("FAIL");
+                        swipeLeft(cardIndex);
+                    }}
+                    onSwipedRight={(cardIndex) => {
+                        console.log("PASS");
+                        swipeRight(cardIndex);
+                    }}
                     overlayLabels={{
                         left: {
                             title: "NOPE",
